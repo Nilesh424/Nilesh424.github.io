@@ -18,5 +18,5 @@ This blog is just for that.
 
  
 <p style="text-align: center; margin-top: 1.5em;">
-  <a href="/assets/files/Nilesh-Resume.pdf" target="_blank" class="cs-btn ch"> If you care. View/Download Resume (PDF)</a> 
+  <a href="/assets/files/Nilesh-Resume.pdf" target="_blank" class="cs-btn ch">  View/Download Resume (PDF)</a> 
 </p>
