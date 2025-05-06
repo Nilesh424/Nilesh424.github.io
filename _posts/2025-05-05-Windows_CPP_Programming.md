@@ -5,69 +5,94 @@ date:   2025-05-02 00:23:21 -0500
 categories: Windows Shellcoding
 ---
 
-Windows is one the most complicated operating systems out there, its convoulted, bloated and more importantly, it's very fun. The linux people with their emacs and 46 tmux sessions can sit this one out. 
+ 
 
-In this blog post, I'll just be exploring a bit of windows programming. Specifically, I'll be looking into making a small .exe(Portable Executable) file that: 
+Windows is one of the most complicated operating systems out there, it's convoluted, bloated, and more importantly, it's very fun. The Linux people with their Emacs and 46 tmux sessions can sit this one out.
+
+
+In this blog post, I'll explore a bit of Windows programming. Specifically, I'll be looking into making a small .exe(Portable Executable) file that:
+
 
 {% highlight cpp %}
 I. Launches a process (cmd.exe).
 II. Configures a Pipe for IPC(InterProcessCommunication) to said process.
 III. Makes the cmd.exe execute an echo command -> echo Hello from CRT-Free Parent!
-IV. After which it will go back into the void by executing the Exit command.
+IV. After which, it will go back into the void by executing the Exit command.
 {% endhighlight %}
 
 
-The thing is,  I'll be doing all of this, without any of the helpers that we normally have.\\
-So, no strcmp, no strlen, no easy money CreateProcessA/W/Ex linked to the binary. 
 
-The binary will be empty on imports, at least when it sits on the disk. The O.S loader, when it maps the exe it into memory, will load copies of a couple of Dll's for us.
+
+The thing is,  I'll be doing all of this, without any of the helpers that we normally have.\\
+So, no strcmp, no strlen, no easy money, CreateProcessA/W/Ex linked to the binary.
+
+
+The binary will be empty on imports, at least when it sits on the disk. The O.S loader, when it maps the exe into memory, will load copies of a couple of Dll's for us.
 ![IDA_IMPORTS](/assets/images/B1/importnada.png){:.img-medium}
 
-Nothing will be referenced from said Dlls statically. I will be dynamically  resolving these functions at runtime, w/o any obfucscation, and using some compiler intrinsics (Nerd Speak for forcing compiler to spit out specific assembly instructions).
 
-This is also known as making a position independent binary/code. Why position independent, well, It just means that I can place it anywhere in memory, and it'll run and do its job. This is something to yearn for(!ha), by people doing exploit development or Malware development. Take the case of exploit development, lets say you find a buffer overrun that overwrites the return pointer of some function on the stack, and now you have the ability to reroute execution to some random place, or, you have the ability to run raw assembly at the point of overwrite. 
+Nothing will be referenced from said DLLs statically. I will be dynamically resolving these functions at runtime, w/o any obfuscation, and using some compiler intrinsics (Nerd Speak for forcing the compiler to spit out specific assembly instructions).
 
-But you now have found yourself in the situation where, you dont know where in memory you are, courtesy of ASLR. Simply put, you want to set up variables and make some system calls and achieve some random objective.
-<br> 
-You can totally set up the variables with assembly, but, in order to do something useful, you almost certainly have to make system calls, unless you've found some insane exploit that gets the kernel to read your userland code directly and you know where everything at all times across all versions of windows. If you're omniscient like that, let me know, I've got a couple of questions.
+
+This is also known as making a position independent binary/code. Why position independent, well, it just means that I can place it anywhere in memory, and it'll run and do its job. This is something to yearn for(!ha), by people doing exploit development or Malware development. Take the case of exploit development, let's say you find a buffer overrun that overwrites the return pointer of some function on the stack, and now you can reroute execution to some random place, or you can run raw assembly at the point of overwrite.
+
+
+But you now have found yourself in the situation where you don't know where in memory you are, courtesy of ASLR. Simply put, you want to set up variables and make some system calls and achieve some random objective.
 <br>
-But where are these system calls, and how do you make them.?<br>
- Well, am I glad you did'nt ask. In the case of windows, they operate with the concept of SSN, or System Service Numbers. Right before doing the SYSCALL/SYSENTER/int 0x2e insturction, a set of instructions load a specific number into the eax register, that number corresponds to the routine you want the kernel to run for you.
+You can totally set up the variables with assembly, but, in order to do something useful, you almost certainly have to make system calls, unless you've found some insane exploit that gets the kernel to read your userland code directly and you know where everything is at all times across all versions of windows. If you're omniscient like that, let me know, I've got a couple of questions.
 <br>
-The syscall instruction tells the CPU to, among other things, to save some of the current user mode states, read the MSR (which is just a register that is configured at bootup to point to a specific location, Im almost sure its the MSR_LSTAR). This MSR register points to kernel routines to execute system calls with KiSystemCall/kiFastSystemCall. The CPU then sets the IP to the address read from the MSR, and the handler takes over, reading the number in eax, which contains the SSN.
-<br> 
-The SSN is like an index to the SSDT (System Serivce Descriptor Table), its an array of function pointers.
+But where are these system calls, and how do you make them?<br>
+ Well, am I glad you didn't ask. In the case of Windows, they operate with the concept of SSN, or System Service Numbers. Right before doing the SYSCALL/SYSENTER/int 0x2e instruction, a set of instructions loads a specific number into the eax register, that number corresponds to the routine you want the kernel to run for you.
+<br>
+The syscall instruction tells the CPU to, among other things, save some of the current user mode states, read the MSR (which is just a register that is configured at bootup to point to a specific location, I'm almost sure it's the MSR_LSTAR). This MSR register points to kernel routines to execute system calls with KiSystemCall/kiFastSystemCall. The CPU then sets the IP to the address read from the MSR, and the handler takes over, reading the number in eax, which contains the SSN.
+<br>
+The SSN is like an index to the SSDT (System Service Descriptor Table), it's an array of function pointers.
 The kernel handler copies the arguments from the usermode registers and stacks to where the kernel expects them, and then calls the routine pointed to by the array.
 
-Post execution, it returns the status or return value to the volatile registers, does the sysexit and transitions back to user mode. 
 
-But to us, they are just functions located in the DLL's , that provide the above functionaity for you, the user, who is often hostile and a borderline caveman. 
+Post execution, it returns the status or return value to the volatile registers, does the sysexit, and transitions back to user mode.
 
-During the compile+linking voodoo, the program you write is translated to the final executable that you can run. There are place holders that are put in areas where the function call is supposed to take place, this is done by front end and IL portion of the process(I think.). When the back end/linking has to be done, for a specific target, the linker decides to "link" the place holder, and put the directive in that basically says, from dll x, import funciton y, and call the imported function. This is called dynamic linking. The compiler generates code that will call through these address table entries, which get filled in at load time.
+
+But to us, they are just functions located in the DLL's , that provide the above functionality for you, the user, who is often hostile and a borderline caveman.
+
+
+During the compile+linking voodoo, the program you write is translated to the final executable that you can run. There are place holders that are put in areas where the function call is supposed to take place, this is done by the front end and IL portion of the process(I think). When the back end/linking has to be done, for a specific target, the linker decides to "link" the placeholder, and put the directive in that says, from dll x, import function y, and call the imported function. This is called dynamic linking. The compiler generates code that will call through these address table entries, which get filled in at load time.
+
 
  The order of function call is usually like this:<br>
- Function in your faviorite DLL -> The abyss -> NTDLL.DLL -> Transition -> Kernel code. <br>
- All roads lead to NTDLL.DLL(Almost). 
+ Function in your favorite DLL -> The abyss -> NTDLL.DLL -> Transition -> Kernel code. <br>
+ All roads lead to NTDLL.DLL(Almost).
 
-Why would I want to do this you ask, the answer is... PAIN. Ok, not really, it's that I got curious about how these malware developers go about doing what they do. If you've ever done Malware Reverse Engineering, you'd notice that a lot of the binaries you find , the imports are either junk or straight up non existent. 
+
+Why would I want to do this, you ask? The answer is... PAIN. Ok, not really, it's that I got curious about how these malware developers go about doing what they do. If you've ever done Malware Reverse Engineering, you'd notice that a lot of the binaries you find, the imports are either junk or straight up nonexistent.
+
 
 Here is a flavour of the ReVil ransomware circa 2020 that does function resolution.
 
+
 ![IAT_RESOLVE](/assets/images/B1/IAT_Resolve.png){:.img-medium}
 
-The initial binary doesnt have much, as he decied to pack his binary, with.. another binary. This Developer encrypted his secondary binary/payload using RC4 within the data section, decrypted it at runtime, dropped it in memory. 
-So he needed to resolve imports aka functions, for the in memory payload/exe.
+
+The initial binary doesn't have much, as he decided to pack his binary with.. another binary. This Developer encrypted his secondary binary/payload using RC4 within the data section, decrypted it at runtime, dropped it in memory.
+So he needed to resolve imports, aka functions, for the in-memory payload/exe.
+
+
 
 
 ![DECRYPT](/assets\images\B1\RC4DECRYPT.png){:.img-medium}
 
 
-He has called this function 119 times, meaning he resovled 119 unique functions by walking the IAT to first get a few important functions. Using encrypted strings within the payload, 
-initializing RC4 SBOXs each time he wants to get a string of the function to find. They decide the key by offsets within the blob of encrypted text that will resovle to valid function names, post which they load the library using the LoadLibrary function. He ends up getting the in memory adress of the function either by walking the DLL manually or by using the handy GetProcAddress function after loading the library, and then proceeds to enrypt your files, of course. 
 
-One way to find functions is to walk the PEB/TEB, which if you've never encountered before, is just something that every windows userland process has. You can think about this structure as something that the windows kernel uses to keep track what the process owns, things like stack range, heaps that the process owns, debugging information and 17500 other things.
 
-It is a very complicated sturcture, here is just a few fields that make it up.
+He has called this function 119 times, meaning he resolved 119 unique functions by walking the IAT to first get a few important functions. Using encrypted strings within the payload,
+initializing RC4 SBOXs each time he wants to get a string of the function to find. They decide the key by offsets within the blob of encrypted text that will resolve to valid function names, post which they load the library using the LoadLibrary function. He ends up getting the in memory address of the function either by walking the DLL manually or by using the handy GetProcAddress function after loading the library, and then proceeds to encrypt your files, of course.
+
+
+One way to find functions is to walk the PEB/TEB, which, if you've never encountered it before, is just something that every Windows userland process has. You can think about this structure as something that the Windows kernel uses to keep track of what the process owns, things like stack range, heaps that the process owns, debugging information and 17500 other things.
+
+
+It is a very complicated structure; here are just a few fields that make it up.
+
 
 {% highlight cpp %}
 //0x250 bytes (sizeof)
@@ -99,33 +124,49 @@ struct _PEB
     VOID* ProcessHeap;                                                      //0x18
     struct _RTL_CRITICAL_SECTION* FastPebLock;                              //0x1c
     VOID* AtlThunkSListPtr;                                                 //0x20
-    VOID* IFEOKey; 
+    VOID* IFEOKey;
+
 
     .......................
 
+
     ....
+
 
 {% endhighlight %}
 
-The fields are either constants that can change with windows versions, or are pointers that link to other structures, that in turn link to other structures, that in turn link to.... you get the idea.
-We will be traversing the _PEB_LDR_DATA data. The above snippet, taken from vergiliusproject, is for windows 8. The same concept across all versions of windows, so doing it this way is a little portable as well.
 
-Tecnically "The PEB and TEB is a per-process/thread data structure that resides in memory, contains information and is a fundamental data structure that hold process and thread-specific information. The PEB contains global process data, while the TEB stores thread-specific data and a pointer to the PEB"
-According to MSDN, this is field of the PEB described is as "A pointer to a PEB_LDR_DATA structure that contains information about the loaded modules for the process.".
-
-In our use case however, we can access this strucutre by using something known as segment register, in a 64 bit context its the GS:[0x60] and in the 32 bit context it FS:[0x30].
-These segment registers are valid in userland, and, interestingly even in the kernel space, they switch up to kernel representations of the process, with E/KPROCESS and E/KTHREAD, they are known as Opaque Structures and the references change when a syscall is made (PreviousMode & CR bits, I think). This topic alone can be mad as a whole box of frogs, Ill leave that up for later to describe it in more detail. However, if youre an impatient man/woman/spacemarine, you can check out this guys blog [Connor Mcgarr](https://connormcgarr.github.io/) or this mans entire youtube channel [Offbyone](https://www.youtube.com/@OffByOneSecurity) or [OALBS](https://www.youtube.com/OALABs) or [Alexander Borges](https://exploitreversing.com/) or these peoples content [Yarden Shafir](https://windows-internals.com/author/yarden/), [Chompie](https://x.com/chompie1337?lang=en). Theres a lot of incredbile people working in this space, I cant even list them all. 
+The fields are either constants that can change with Windows versions, or are pointers that link to other structures, that in turn link to other structures, that in turn link to.... You get the idea.
+We will be traversing the _PEB_LDR_DATA data. The above snippet, taken from Vergiliusproject, is for Windows 8. The same concept across all versions of Windows, so doing it this way is a little portable as well.
 
 
+Technically "The PEB and TEB is a per-process/thread data structure that resides in memory, contain information, and is a fundamental data structure that hold process and thread-specific information. The PEB contains global process data, while the TEB stores thread-specific data and a pointer to the PEB."
+According to MSDN, this field of the PEB described as "A pointer to a PEB_LDR_DATA structure that contains information about the loaded modules for the process.".
 
 
-Okay, jumping to the code, which is presumably what youre here for.
+In our use case, however, we can access this structure by using something known as the segment register, in a 64-bit context its the GS:[0x60] and in the 32 bit context it FS:[0x30].
+These segment registers are valid in userland, and, interestingly, even in the kernel space, they switch up to kernel representations of the process, with E/KPROCESS and E/KTHREAD, they are known as Opaque Structures, and the references change when a syscall is made (PreviousMode & CR bits, I think). This topic alone can be mad as a whole box of frogs. I'll leave that up for later to describe it in more detail. However, if youre an impatient man/woman/spacemarine, you can check out this guys blog [Connor Mcgarr](https://connormcgarr.github.io/) or this mans entire youtube channel [Offbyone](https://www.youtube.com/@OffByOneSecurity) or [OALBS](https://www.youtube.com/OALABs) or [Alexander Borges](https://exploitreversing.com/) or these peoples content [Yarden Shafir](https://windows-internals.com/author/yarden/), [Chompie](https://x.com/chompie1337?lang=en). There are a lot of incredible people working in this space, I can't even list them all.
 
 
 
 
 
-This is the core, this is what we would care about, this is also what is signatured to death, i.e if your binary is doing this or something like this without any obfuscation, it's GG.
+
+
+
+Okay, jumping to the code, which is presumably what you're here for.
+
+
+
+
+
+
+
+
+
+
+This is the core, this is what we would care about, this is also what is signatured to death, i.e, if your binary is doing this or something like this without any obfuscation, it's GG.
+
 
 {%highlight cpp%}
 int ResolveFuncsByHashInModule(HMODULE hModule, CONST DWORD* pTargetHashes, FARPROC* pResolvedPtrs, int numHashes)
@@ -136,43 +177,54 @@ int ResolveFuncsByHashInModule(HMODULE hModule, CONST DWORD* pTargetHashes, FARP
     }
 
 
+
+
     int foundCount = 0;
     BYTE* pBase = (BYTE*)hModule;
     PIMAGE_DOS_HEADER pDosHeader = (PIMAGE_DOS_HEADER)pBase;
     PIMAGE_NT_HEADERS pNtHeaders = (PIMAGE_NT_HEADERS)(pBase + pDosHeader->e_lfanew);
     if (pNtHeaders->Signature != IMAGE_NT_SIGNATURE) return 0;
 
+
     IMAGE_DATA_DIRECTORY exportDataDir = pNtHeaders->OptionalHeader.DataDirectory[IMAGE_DIRECTORY_ENTRY_EXPORT];
+
 
     if (exportDataDir.VirtualAddress == 0 || exportDataDir.Size == 0) {
         return 0; // No Export Directory in this module
     }
+
 
     if (exportDataDir.VirtualAddress + exportDataDir.Size > pNtHeaders->OptionalHeader.SizeOfImage)
     {
         return 0;
     }
 
+
     PIMAGE_EXPORT_DIRECTORY pExportDir = (PIMAGE_EXPORT_DIRECTORY)(pBase + exportDataDir.VirtualAddress);
     DWORD* pNames = (DWORD*)(pBase + pExportDir->AddressOfNames);
     WORD* pOrdinals = (WORD*)(pBase + pExportDir->AddressOfNameOrdinals);
     DWORD* pFunctions = (DWORD*)(pBase + pExportDir->AddressOfFunctions);
+
 
     if (pExportDir->NumberOfNames > 65535)
     { //if some impossible number of exports, gtfo
         return 0;
     }
 
+
     for (DWORD i = 0; i < pExportDir->NumberOfNames; i++) {
+
 
         DWORD nameRVA = pNames[i];
         if (nameRVA == 0 || nameRVA > pNtHeaders->OptionalHeader.SizeOfImage) continue;
         char* szFuncName = (char*)(pBase + nameRVA);
 
+
         //Hash the found Function name, so that we can compare to prehashed values
         DWORD runtimeHash = HasherDjb2(szFuncName);
 
-        // for each 
+
+        // for each
         for (int j = 0; j < numHashes; j++) {
             if (runtimeHash == pTargetHashes[j] && pResolvedPtrs[j] == NULL) {
                 WORD ordinalIndex = pOrdinals[i];
@@ -183,9 +235,11 @@ int ResolveFuncsByHashInModule(HMODULE hModule, CONST DWORD* pTargetHashes, FARP
                 DWORD eatStartRVA = exportDataDir.VirtualAddress;
                 DWORD eatEndRVA = eatStartRVA + exportDataDir.Size;
 
+
                 if (functionRVA >= eatStartRVA && functionRVA < eatEndRVA) {
                     continue;
                 }
+
 
                 pResolvedPtrs[j] = funcPtr;
                 foundCount++;
@@ -200,19 +254,27 @@ int ResolveFuncsByHashInModule(HMODULE hModule, CONST DWORD* pTargetHashes, FARP
 }
 {%endhighlight%}
 
-We care about three arrays that are available to us from within the PEB. The Names, Ordinals, and Functions Array. 
 
-The Names array points to.... function names, of course. These are name strings, so your exported function can be found here, just the name mind you. 
+We care about three arrays that are available to us from within the PEB. The Names, Ordinals, and Functions Array.
 
-The Ordinals array, this is 1:1 mapped to the Names array, in the sense that Names\[index\] == Ordinals\[index\]. This array contains the the ordinal number for each named function. Don't hate me, hate microsoft, it's a common approach.
 
-Finally, the Functions array, this is what we care about, the thing that well finally use. This functions array contains the "RVA" or the relative virtual address of the actual implementation within the DLL. 
+The Names array points to.... function names, of course. These are name strings, so your exported function can be found here, just the name, mind you.
 
-So what well be doing is checking the Names and ordinals array, and based of the found values, we index the functions array and voila, we have found the function we care about.
 
-Okay, the core  is out the way, time to describe the implementation.
+The Ordinals array is 1:1 mapped to the Names array, in the sense that Names\[index\] == Ordinals\[index\]. This array contains the ordinal number for each named function. Don't hate me, hate Microsoft, it's a common approach.
 
-We are looking for these functions, in two dlls, kernel32.dll and NTDLL.dll.
+
+Finally, the Functions array, this is what we care about, the thing that we well finally use. This function's array contains the "RVA" or the relative virtual address of the actual implementation within the DLL.
+
+
+So what we'll be doing is checking the Names and ordinals array, and based on the found values, we index the functions array, and voila, we have found the function we care about.
+
+
+Okay, the core is out of the way, time to describe the implementation.
+
+
+We are looking for these functions in two DLLs, kernel32.dll and NTDLL.dll.
+
 
 {%highlight cpp%}
 typedef BOOL(WINAPI* FuncCreateProcessA)(LPCSTR, LPSTR, LPSECURITY_ATTRIBUTES, LPSECURITY_ATTRIBUTES, BOOL, DWORD, LPVOID, LPCSTR, LPSTARTUPINFOA, LPPROCESS_INFORMATION);
@@ -228,11 +290,15 @@ typedef DWORD(WINAPI* FuncGetLastError)(VOID);
 typedef VOID(WINAPI* FuncRtlZeroMemory)(PVOID Destination, SIZE_T Length);
 {%endhighlight%}
 
-The typedefs exist as we are not relying on anything that the header files provide for function signatures. This is just keyword that creates an alias for another data type. 
-We do this so that the we can supply correct params when calling the function, the complier helps, and quite importantly, so that I dont pull my hair out and mainatain some code readablity.
+
+The typedefs exist as we are not relying on anything that the header files provide for function signatures. This is just a keyword that creates an alias for another data type.
+We do this so that we can supply correct params when calling the function, the compiler helps, and quite importantly, so that I don't pull my hair out and maintain some code readability.
+
+
 
 
 Now for the helper functions
+
 
 {%highlight cpp%}
 size_t get_len(CONST WCHAR* str) {
@@ -247,31 +313,35 @@ size_t get_len_char(const char* str) {
     return (s - str);
 }
 
-The get_len(); function helps to figure the length a particuar wide character string or WCHAR. 
-WCHARS are used for unicode text in windows. 
-This function takes in pointer to the start of the string and returns a number, or size_t. 
+
+The get_len(); function helps to figure out the length of a particular wide character string or WCHAR.
+WCHARS are used for Unicode text in Windows.
+This function takes in a pointer to the start of the string and returns a number, or size_t.
 That tells me how many chars are in it without the null terminator.
 
-This could be done with the wcslen();, but you know, CRT.
-Starts at the begining, moves one character at a time until it finds the null terminator, 
-and the length is difference between the final position and the starting position.
 
-Simlar logic for the get_len_char(); function, 
-but it works on normal strings, or , narrow character strings. 
+This could be done with the wcslen();, but you know, CRT.
+Starts at the beginning, moves one character at a time until it finds the null terminator,
+and the length is the difference between the final position and the starting position.
+
+
+Similar logic for the get_len_char(); function,
+but it works on normal strings or narrow character strings.
 Replaces the standard strlen();.
 {%endhighlight%}
 <br>
 
+
 {%highlight cpp%}
 void copy_str(WCHAR* dest, const WCHAR* src, size_t destMaxChars, size_t srcLen) {
     if (!dest || destMaxChars == 0 || !src) {
-        if (dest && destMaxChars > 0) dest[0] = L'\0'; 
+        if (dest && destMaxChars > 0) dest[0] = L'\0';
         return;
     }
     size_t charsToCopy = srcLen;
     if (charsToCopy >= destMaxChars) charsToCopy = destMaxChars - 1;
     size_t i = 0;
-    while (i < charsToCopy && src[i] != L'\0') { 
+    while (i < charsToCopy && src[i] != L'\0') {
         dest[i] = src[i];
         i++;
     }
@@ -279,21 +349,23 @@ void copy_str(WCHAR* dest, const WCHAR* src, size_t destMaxChars, size_t srcLen)
 }
 void copy_str_char(char* dest, const char* src, size_t destMaxBytes) {
     if (!dest || destMaxBytes == 0) return;
-    dest[0] = '\0'; 
+    dest[0] = '\0';
     if (!src) return;
+
 
     size_t i = 0;
     while (src[i] != '\0' && i < (destMaxBytes - 1)) {
         dest[i] = src[i];
         i++;
     }
-    dest[i] = '\0'; 
+    dest[i] = '\0';
 }
-The next is the copy_str, and the copy_str_char. It just copies a wide/narrow character string from 
-source to destination, ensures null termination. 
+The next is the copy_str and the copy_str_char. It just copies a wide/narrow character string from
+source to destination, ensures null termination.
 The alternatives would be wsncpy(); and strcpy_s();.
 
-Both these functions return nothing, but modify the destination buffer, 
+
+Both these functions return nothing, but modify the destination buffer.
 populating it with the contents from the source.
 Copies until the source ends or the destination buffer is almost full, then null terminates
 {%endhighlight%}
@@ -309,22 +381,27 @@ const WCHAR* GetDllName(const UNICODE_STRING* Path) {
     return start;
 }
 
-If you can read, you can possibly guess that it returns the DLL Name from given path. 
+
+If you can read, you can guess that it returns the DLL Name from the given path.
 However, the path that is supplied to is the UNICODE_STRING path, from the FullDllName.
+
 
 Takes in the pointer to the structure holding the WHCAR path buffer and its length.
 Gets me the file Name.
-DLL path C:\Windows\XYZ\PQR\ [Crypt32.dll]<--- this. 
+DLL path C:\Windows\XYZ\PQR\ [Crypt32.dll]<--- this.
 
-It calcualtes the end of the string buffer using the field length.
-Then it scans from the end, looking for the last path seperator character.
-If found it returns a pointer the character immediately after the seperator.
-If no seperator is found, it just assumes the the whole string is the filename and 
-returns the original start pointer. 
+
+It calculates the end of the string buffer using the field length.
+Then it scans from the end, looking for the last path separator character.
+If found, it returns a pointer to the character immediately after the separator.
+If no separator is found, it just assumes the whole string is the filename and
+returns the original start pointer.
 {%endhighlight%}
+
 
 <br>
 {%highlight cpp%}
+
 
 typedef struct _Module_Info {
     WCHAR BaseName[MAX_MODULE_NAME_LEN];
@@ -332,22 +409,29 @@ typedef struct _Module_Info {
 } MODULE_INFO, * PMODULE_INFO;
 
 
+
+
 int GetLoadedModules(MODULE_INFO* outputArray, int maxEntries) {
+
 
     if (!outputArray || maxEntries <= 0) {
         return 0;
     }
 
+
     PPEB pPeb = (PPEB)__readgsqword(0x60);
+
 
     if (!pPeb || !pPeb->Ldr) {
         return -1;
     }
 
+
     PLIST_ENTRY pListHead = &(pPeb->Ldr->InMemoryOrderModuleList);
     if (pListHead->Flink == pListHead) {
         return 0;
     }
+
 
     int currentCount = 0;
     PLIST_ENTRY pCurrentEntry = pListHead->Flink;
@@ -358,8 +442,10 @@ int GetLoadedModules(MODULE_INFO* outputArray, int maxEntries) {
         PLDR_DATA_TABLE_ENTRY pModuleEntry = CONTAINING_RECORD(
             pCurrentEntry, LDR_DATA_TABLE_ENTRY, InMemoryOrderLinks);
 
+
         CONST WCHAR* baseNamePtr = NULL;
         size_t baseNameLen = 0;
+
 
         if (pModuleEntry->FullDllName.Buffer && pModuleEntry->FullDllName.Length > 0) {
             baseNamePtr = GetDllName(&pModuleEntry->FullDllName);
@@ -369,6 +455,7 @@ int GetLoadedModules(MODULE_INFO* outputArray, int maxEntries) {
             }
         }
 
+
         if (baseNamePtr) {
             copy_str(outputArray[currentCount].BaseName, baseNamePtr, MAX_MODULE_NAME_LEN, baseNameLen);
         }
@@ -376,184 +463,240 @@ int GetLoadedModules(MODULE_INFO* outputArray, int maxEntries) {
             copy_str(outputArray[currentCount].BaseName, L"[NAME N/A]", MAX_MODULE_NAME_LEN, 10);
         }
 
+
         outputArray[currentCount].DllBase = pModuleEntry->DllBase;
         currentCount++;
 
+
         pCurrentEntry = pCurrentEntry->Flink;
     }
+
 
     return currentCount;
 }
 
 
-This function gets a list of all the DLLs that are currently loaded into the program memory. 
-With windows, its guarenteed that kernel32.dll and NTDLL.dll are loaded.
 
-Takes in a pointer to an array of the MODULE_INFO Structs where the results, 
-which is the DLL Name and In memory Base address is stored.
+
+This function gets a list of all the DLLs that are currently loaded into the program memory.
+With Windows, it's guaranteed that kernel32.dll and NTDLL.dll are loaded.
+
+
+Takes in a pointer to an array of the MODULE_INFO Structs where the results,
+which is the DLL Name and In memory Base address are stored.
+
 
 It fills the output array with information about each loaded DLL, and returns the number of modules found, if none are found, we just return -1.
 
-It find the Process Environment Block with the compier intrinsic, __readgsqdword(0x60). Which gets the address of the LDR Data. 
 
-It then walks a Double Linked list, InMemoryOrderModuleList, where each node, called the, LDR_DATA_TABLE_ENTRY, contains
-the information about a loaded DLL.
+It finds the Process Environment Block with the compiler intrinsic, __readgsqdword(0x60). Which gets the address of the LDR Data.
 
-For each DLL, we get back the base address, and the DLL name.
+
+It then walks a Double Linked list, InMemoryOrderModuleList, where each node, called the LDR_DATA_TABLE_ENTRY, contains
+The information about a loaded DLL.
+
+
+For each DLL, we get back the base address and the DLL name.
 We copy the string and store the file name.
 {%endhighlight%}
+
+
 
 
 {%highlight cpp%}
 int CompareSubstring(const WCHAR* subStr, size_t subStrLen, const WCHAR* wzStr2) {
     if (!subStr || !wzStr2) {
 
+
         if (subStrLen == 0) {
-            return (!wzStr2 || wzStr2[0] == L'\0') ? 0 : -1; 
+            return (!wzStr2 || wzStr2[0] == L'\0') ? 0 : -1;
         }
         return 1; // Non-equal if other is non-empty
     }
     size_t len2 = get_len(wzStr2);
 
+
     if (subStrLen != len2) {
-        return 1; 
+        return 1;
     }
     if (subStrLen == 0) {
         return 0;
     }
 
-  
+
+ 
     for (size_t i = 0; i < subStrLen; ++i) {
         WCHAR c1 = subStr[i];
         WCHAR c2 = wzStr2[i];
 
+
         // Convert to lowercase
         if (c1 >= L'A' && c1 <= L'Z') c1 += (L'a' - L'A');
         if (c2 >= L'A' && c2 <= L'Z') c2 += (L'a' - L'A');
+
 
         if (c1 != c2) {
             return (int)(c1 - c2);
         }
     }
 
+
     return 0;  
 }
 
-Compares two WCHAR strings for equality, while being case insensitve.
 
-Compares subStr whose length we already know, subStrLen, against 
+Compares two WCHAR strings for equality, while being case insensitive.
+
+
+Compares subStr whose length we already know, subStrLen, against
 a standard null terminated string, wzStr2.
 
-Takes in two strings, checks if the known length, subStrLen, matches the calculated length of 
+
+Takes in two strings, checks if the known length, subStrLen, matches the calculated length of
 the null terminated string, wzStr2.
 
-If the lengths differ, they cant be equal. 
-If they match, compare character by character. 
-For each pair of characters, convert them both to lowercase using deltas before comparing them. 
-If any mismatch, they arent equalt, return non zero value.
+
+If the lengths differ, they can't be equal.
+If they match, compare character by character.
+For each pair of characters, convert them both to lowercase using deltas before comparing them.
+If any mismatch, they aren't equal, return non zero value.
 Else, return 0.
+
 
 Effectively replaces the _wcsicmp();
 
+
 {%endhighlight%}
+
 
 {%highlight cpp%}
 DWORD HasherDjb2(const char* str) {
     DWORD hash = 5381; //  seed value
     int c;
 
-  
-    while ((c = (unsigned char)*str++) != 0) { 
-        hash = ((hash << 5) + hash) + c; 
+
+ 
+    while ((c = (unsigned char)*str++) != 0) {
+        hash = ((hash << 5) + hash) + c;
     }
     return hash;
 }
 
+
 Simple scalar hashing routine.
-Takes in narrow string to hash, returns a DWORD, or double word which is the calculated hash value.
-This is very simple algo, people often use rot13 strings, or xor, or something a tad bit more complex.
-It called dbj2, I actually dont know why, but there is salsa20, and chacha20, 
+Takes in the narrow string to hash, returns a DWORD, or double word, which is the calculated hash value.
+This is a very simple algo, people often use rot13 strings, or xor, or something a tad bit more complex.
+It's called dbj2, I actually dont know why, but there is salsa20, and chacha20,
 who knows what the crypto people are into.
+
 
 This function basically creates a unique number from a string,
 which we use to ID function names numerically instead of text.
 
 
+
+
 {%endhighlight%}
+
 
 {%highlight cpp%}
 ResolveFuncsByHashInModule(HMODULE hModule, CONST DWORD* pTargetHashes, FARPROC* pResolvedPtrs, int numHashes)
 
-The implementation is above, Ill just run trough what it does.
 
-Takes in the Handle to a module, hModule;, which is the adress of the dll.
-The respective hashes to search for, which we will have precalcuated, pTargetHashes;
+The implementation is above, I'll just run through what it does.
 
-The result, if we find address of the functions we want, to be stored in pResolvedPtrs;. This must be null initialized.
-The numberofHashes to look for, numHashes;. Ive just included this just to reduce runtime, if we have found the hashes,
+
+Takes in the Handle to a module, hModule;, which is the address of the dll.
+The respective hashes to search for, which we will have precalculated, pTargetHashes;
+
+
+The result, if we findthe  address of the functions we want, is to be stored in pResolvedPtrs;. This must be null initialized.
+The numberofHashes to look for, numHashes;. I've just included this just to reduce runtime, if we have found the hashes,
 that is foundCount == numHashes. Stop, instead of running through the whole DLL.
+
 
 This returns the number of functions that were found and resolved.
 
-We read the Portable Executable/PE headers, (everything is a PE file, dlls, exes, sys.), 
-to find the Export Adress Table or EAT. 
+
+We read the Portable Executable/PE headers (everything is a PE file, dlls, exes, sys.),
+to find the Export Address Table or EAT.
+
 
 The EAT lists all the functions that the DLL makes available.
-This function iterates through the list of exported names, calculates the hash of each name using the same hashing function that we used to calcualte the targets.
+This function iterates through the list of exported names, calculates the hash of each name using the same hashing function that we used to calculate the targets.
 
-Compares these hashes to the target hashes within the pTargetHashes; array. 
-If a hash matches AND we havent already found it before,
-it looks up the functions actual memory address using the
-Ordinals and AdressOfFunctions arrays, and stores it in the 
-pResolvedPtrs; array. 
 
-If something is forwarded into the abyss, lets say to ntdll.dll, we just skip it, as we can reseach the correct target if we need to.
+Compares these hashes to the target hashes within the pTargetHashes; array.
+If a hash matches AND we haven't already found it before,
+It looks up the function's actual memory address using the
+Ordinals and AdressOfFunctions arrays, and stores it in the
+pResolvedPtrs; array.
 
-Use hashes, traverse EAT, find functions.
+
+If something is forwarded into the abyss, lets say to ntdll.dll, we just skip it, as we can re-search the correct target if we need to.
+
+
+Use hashes, traverse EAT, and find functions.
 {%endhighlight%}
+
+
+
 
 
 
 {%highlight cpp%}
 ZeroMemory(PVOID Destination, SIZE_T Length);
 
-Simple, take destination, zero it out. 
-Ideally, I should be using, sse or avx instructions. 
-But I was in a considerable amount of pain already. 
 
-But, if you are someone that is inclined to do such a thing this is how you would do it.
+Simple, take the destination, zero it out.
+Ideally, I should be using SSE or AVX instructions.
+But I was in a considerable amount of pain already.
+
+
+But, if you are someone who is inclined to do such a thing ,this is how you would do it.
+
 
 inline void my_set_zero(void* dest, size_t length){
+
 
     char* point = (char*) dest;
     size_t i= 0;
     __m128i zero = __mm_setzero_si128();
+
 
     size_t byte_chunks = length / 16;
     for(i =0 ; i < byte_chunks; i++){
         __mm_storeu_si128((__m128i *)(point + (i*16)), zero);
     }
 
+
     size_t left_overs= byte_chunks * 16;
     for(i=left_overs; i < length ; i++){
         point[i] = 0;
     }
 }
-Zero out 16 bytes at time.
-whatevers left, zero that out as well.
+Zero out 16 bytes at a time.
+Whatever's left, zero that out as well.
 
-Or, resolve RtlZeroMemory, and let windows hanlde it for you.
+
+Or, resolve RtlZeroMemory, and let Windows handle it for you.
+
+
 
 
 {%endhighlight%}
 
 
 
+
+
+
 Putting it all together
+
 
 {%highlight cpp%}
 int start() {
-    #define ZeroMemory(Destination, Length) if(pRtlZeroMemory) pRtlZeroMemory((Destination), (Length)); 
+    #define ZeroMemory(Destination, Length) if(pRtlZeroMemory) pRtlZeroMemory((Destination), (Length));
     #define MAX_CMD_PATH 512
     MODULE_INFO Modules[256];
     FARPROC Kernel32Ptrs[10] = { NULL, NULL, NULL, NULL, NULL, NULL, NULL,NULL, NULL, NULL };
@@ -561,20 +704,25 @@ int start() {
     //Get the loaded Modules from the current Process
     int moduleCount = GetLoadedModules(Modules, 256);
 
+
     if (moduleCount < 0) { return 1; }
+
 
     HMODULE hK32DLL = NULL;
     HMODULE hNtdll = NULL;
+
 
     WCHAR  s_kernel_32_dll[] = L"Kernel32.dll";
     WCHAR  s_ntdll_dll[] = L"Ntdll.dll";
     for (int i = 0; i < moduleCount; i++) {
         size_t baseNameLength = get_len(Modules[i].BaseName);
 
+
         if (CompareSubstring(Modules[i].BaseName, baseNameLength, s_kernel_32_dll) == 0) {
             //Match -> xyz\pqr\[kernel32.dll] in mem == requried Dll
             hK32DLL = (HMODULE)Modules[i].DllBase;
         }
+
 
         if (CompareSubstring(Modules[i].BaseName, baseNameLength, s_ntdll_dll) == 0) {
             hNtdll = (HMODULE)Modules[i].DllBase;
@@ -583,11 +731,14 @@ int start() {
             break;
         }
 
+
     }
 
-    //Find Functions within Kernel32, 
-    //Traverse three arrays, 
+
+    //Find Functions within Kernel32,
+    //Traverse three arrays,
     // Address of Names, Adress of Ordinals, Adrees of NameOridnals
+
 
     CHAR sCreateProcessA[] = "CreateProcessA";
     CHAR sWriteFile[] = "WriteFile";
@@ -601,6 +752,7 @@ int start() {
     CHAR sGetLastError[] = "GetLastError";
     CHAR sRtlZeroMemory[] = "RtlZeroMemory";
 
+
     FuncCreateProcessA pCreateProcessA = NULL;
     FuncWriteFile pWriteFile = NULL;
     FuncCreatePipe pCreatePipe = NULL;
@@ -613,6 +765,7 @@ int start() {
     FuncGetLastError pGetLastError = NULL;
     FuncRtlZeroMemory pRtlZeroMemory = NULL;
 
+
     CONST DWORD FuncHashesK32[] = {
        HasherDjb2(sCreateProcessA), HasherDjb2(sWriteFile), HasherDjb2(sCreatePipe),
         HasherDjb2(sGetStdHandle), HasherDjb2(sCloseHandle), HasherDjb2(sWaitForSingleObject),
@@ -620,23 +773,27 @@ int start() {
         HasherDjb2(sGetLastError)
     };
 
+
     CONST DWORD FuncHashesNTDLL[] = {
         HasherDjb2(sRtlZeroMemory)
     };
-    
+   
     int numberOfFuncs_K32 = sizeof(FuncHashesK32) / sizeof(DWORD);
+
 
     int NumberFoundK32 = ResolveFuncsByHashInModule(
         // -- # 1 The address of the start of required DLL
         hK32DLL,
-        // -- #2 Array of Function Hashes to search for 
+        // -- #2 Array of Function Hashes to search for
         FuncHashesK32,
-        // -- #3  Where to store, must be a null init array, 
-        // will store ptrs to the found funcs 
+        // -- #3  Where to store, must be a null init array,
+        // will store ptrs to the found funcs
         Kernel32Ptrs,
         // -- #4 Number of Funcs to search in DLL, will run this many times.
         numberOfFuncs_K32
         );
+
+
 
 
     pCreateProcessA = (FuncCreateProcessA)Kernel32Ptrs[0];
@@ -651,14 +808,19 @@ int start() {
     pGetLastError = (FuncGetLastError)Kernel32Ptrs[9];
 
 
+
+
     int numberOfFuncs_NTDLL= sizeof(FuncHashesNTDLL) / sizeof(DWORD);
+
 
     int foundNtdll = 0;
     if (hNtdll) {
         foundNtdll = ResolveFuncsByHashInModule(hNtdll, FuncHashesNTDLL, NtdllPtrs, numberOfFuncs_NTDLL);
     }
 
+
     if (foundNtdll > 0) pRtlZeroMemory = (FuncRtlZeroMemory)NtdllPtrs[0];
+
 
  HANDLE hChildStd_IN_Rd = NULL;
     HANDLE hChildStd_IN_Wr = NULL;
@@ -668,24 +830,28 @@ int start() {
     char cmdPath[MAX_CMD_PATH];
     char cmdLine[MAX_CMD_PATH]; // Buffer for command line
 
+
     // Setup security attributes for inheritable pipe handle
     sa.nLength = sizeof(SECURITY_ATTRIBUTES);
     sa.bInheritHandle = TRUE;
     sa.lpSecurityDescriptor = NULL;
+
 
    
     if (!pCreatePipe(&hChildStd_IN_Rd, &hChildStd_IN_Wr, &sa, 0)) {
          pExitProcess(2);
     }
 
-    
+
+   
     if (!pSetHandleInformation(hChildStd_IN_Wr, HANDLE_FLAG_INHERIT, 0)) {
          pCloseHandle(hChildStd_IN_Rd);
         pCloseHandle(hChildStd_IN_Wr);
         pExitProcess(3);
     }
 
-    
+
+   
     CHAR sComSpec[] = "ComSpec";
     if (pGetEnvironmentVariableA(sComSpec, cmdPath, MAX_CMD_PATH) == 0) {
          pCloseHandle(hChildStd_IN_Rd);
@@ -694,70 +860,89 @@ int start() {
     }
     copy_str_char(cmdLine, cmdPath, MAX_CMD_PATH);
 
-    
+
+   
     ZeroMemory(&si, sizeof(si));
     si.cb = sizeof(si);
     si.hStdError = pGetStdHandle(STD_ERROR_HANDLE);
     si.hStdOutput = pGetStdHandle(STD_OUTPUT_HANDLE);
-    si.hStdInput = hChildStd_IN_Rd; 
+    si.hStdInput = hChildStd_IN_Rd;
     si.dwFlags |= STARTF_USESTDHANDLES;
+
 
     ZeroMemory(&pi, sizeof(pi));
 
+
     if (!pCreateProcessA(NULL, cmdLine, NULL, NULL, TRUE, 0, NULL, NULL, &si, &pi)) {
-        
+       
         pCloseHandle(hChildStd_IN_Rd);
         pCloseHandle(hChildStd_IN_Wr);
         pExitProcess(5);
     }
 
-    
-    pCloseHandle(pi.hThread); 
-    pCloseHandle(hChildStd_IN_Rd); 
 
-    
+   
+    pCloseHandle(pi.hThread);
+    pCloseHandle(hChildStd_IN_Rd);
+
+
+   
     CHAR sCommand[] = "echo Hello from CRT-Free Parent!\r\n";
     CHAR sExitCmd[] = "exit\r\n";
     //DWORD bytesWritten;
 
+
     /*if (!pWriteFile(hChildStd_IN_Wr, sCommand, (DWORD)get_len_char(sCommand), &bytesWritten, NULL)) {
       // if you care do the cleanup
 
-      // 
+
+      //
     }
     if (!pWriteFile(hChildStd_IN_Wr, sExitCmd, (DWORD)get_len_char(sExitCmd), &bytesWritten, NULL)) {
-      // if you care do the cleanup,   
+      // if you care do the cleanup,  
     }
+
 
     */
     pCloseHandle(hChildStd_IN_Wr);
 
-    
+
+   
     pWaitForSingleObject(pi.hProcess, INFINITE); // Use INFINITE from WinDef.h
 
-    
+
+   
     pCloseHandle(pi.hProcess);
 
 
-    
+
+
+   
     pExitProcess(0);
 }
 {%endhighlight%}
 
 
 
-A note, before you compile this, you would need to set a few things in the property sheets for visual studio. I'm almost sure im using the 2022 version of it, whichever came with the FLAREVM. 
+
+
+
+A note, before you compile this, you would need to set a few things in the property sheets for visual studio. I'm almost sure im using the 2022 version of it, whichever came with the FLAREVM.
+
 
 {%highlight python%}
+
 
 C++ Language Standard = C++20
 Conformance Mode = No -> Backward Compatibility
 Control Flow Guard = No
 Enable C++ Exceptions = No
 Enable Function Level Linking = Yes
-Enable Intirinsic Functions = Yes
+Enable Intrinsic Functions = Yes
 SDL Checks = No
 Security Check = No Gs
+
+
 
 
 Linker Options:
@@ -766,38 +951,58 @@ Generate Map File = Yes
 This is just so that I can check the length of the opcodes generated
 such that I can copy paste them directly into any kind of implant I write.
 
+
 {%endhighlight%}
 
 
-Walking through start.
 
-Finds the loaded DLLs to get handles to kernel32.dll and Ntdll.dll.
+
+Walking through the start.
+
+
+Find the loaded DLLs to get handles to kernel32.dll and Ntdll.dll.
+
 
 Resolves the needed Windows API functions by Hash, with the ResovleFuncsHashInModule function using the found handles.
 
+
 For sanity, checks for ExitProcess, if not found, early exits.
 
+
 Initializes the STARTUPINFOA, PROCESS_INFORMATION, SECURITY_ATTRIBUTES using the Zeromemory function.
+
 
 Creates a pipe for IPC, with CreatePipeA.
 Configures the pipe handle inheritance with SetHandleInformation.
 
+
 Finds the path with pGetEnvironmentVariable to cmd.exe.
+
+
 
 
 Write the commands, echo and exit to the child process via the pipe.
 
-Waits until the process finishes with WaitForSingleObject, 
+
+Waits until the process finishes with WaitForSingleObject,
 cleans up with CloseHandle, and terminates the entire program.
 
 
-So that was it, a "simple" dynamic function resovler, and a series of calls that writes commands to a cmd.exe child process.   
+
+
+So that was it, a "simple" dynamic function resovler, and a series of calls that writes commands to a cmd.exe child process.  
+
 
 ![DiscountWin](/assets/images/B1/discountwin.png){:.img-medium}
 
 
-In the next blog post, provided I havent ascended, I will cover how to do the same thing but, with native apis. 
+
+
+In the next blog post, provided I haven't ascended, I will cover how to do the same thing but with native apis.
 Specifically, this one.
+
+
+
 
 {%highlight cpp%}
 typedef enum _PS_CREATE_STATE
