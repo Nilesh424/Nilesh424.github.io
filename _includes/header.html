@@ -1,0 +1,24 @@
+<header>
+    <div class="top">
+      <h1>{{ site.title | escape }}</h1>
+      
+      <div class="links">
+        <a href="{{ '/' | relative_url }}"><button target="_blank" class="cs-btn gh" title="Home">Home</button></a>
+        <a href="{{ '/about/' | relative_url }}"><button target="_blank" class="cs-btn gh" title="About">About</button></a>
+        {%- if site.github_username -%}
+          <a href="https://github.com/{{ site.github_username | cgi_escape | escape }}" target="_blank" class="cs-btn gh" title="GitHub">
+          GitHub</a>
+          {%- endif -%}
+          <a href="https://www.linkedin.com/in/{{ site.linkedin_username | cgi_escape | escape }}" target="_blank" class="cs-btn x" title="LinkedIn">LinkedIn</a>
+
+        {%- if site.twitter_username -%}
+          <a href="https://twitter.com/{{ site.twitter_username | cgi_escape | escape }}" target="_blank" class="cs-btn x" title="Twitter">Xitter</a>
+
+        {%- endif -%}
+          
+
+          
+      </div>
+    </div>
+    <p>{{ site.description | escape }}</p>
+    <hr class="cs-hr"> </header>
